@@ -26,6 +26,25 @@ gemini
 Alternativ das Passwort direkt in den `env`-Block schreiben. In Gemini zeigt `/mcp` den Server und seine Tools;
 der erste sinnvolle Aufruf ist `oracle_connection_info`.
 
+### Wichtig: Echtes Kennwort vs. Windows OS-Authentifizierung (NTS)
+
+`oracle-mcp` nutzt `node-oracledb` im **Thin-Modus** (reines JavaScript). Dadurch wird kein Oracle Instant Client benötigt, allerdings wird **keine** Windows-Betriebssystem-Authentifizierung (NTS) unterstützt.
+
+- **Unterschied zu SQL\*Plus:** Wenn du dich lokal unter Windows via `sqlplus sys@localhost:1521/XEPDB1 as sysdba` anmeldest, greift bei aktiviertem `SQLNET.AUTHENTICATION_SERVICES = (NTS)` die Windows-Gruppenzugehörigkeit (`ORA_DBA`). In SQL\*Plus wird die Passworteingabe dann ignoriert.
+- **Fehler `ORA-01017: Benutzername/Kennwort ungültig`:** Der MCP-Server verbindet sich echt über das Netzwerk und prüft das Passwort gegen die Oracle-Kennwortdatei. Stimmt das Passwort in `settings.json` nicht mit dem tatsächlichen Datenbank-Kennwort überein (oder ist `SYS` im Root-Container gesperrt), schlägt der Login fehl.
+
+**Lösung / Kennwort neu setzen:**
+In einer Multitenant-Datenbank (z. B. Oracle 21c XE) muss `SYS` im Root-Container (`CDB$ROOT`) entsperrt und das Passwort mit `CONTAINER = ALL` gesetzt werden:
+
+```sql
+sqlplus / as sysdba
+ALTER SESSION SET CONTAINER = CDB$ROOT;
+ALTER USER sys ACCOUNT UNLOCK;
+ALTER USER sys IDENTIFIED BY "dein-passwort" CONTAINER = ALL;
+exit;
+```
+Danach das identische Passwort in `settings.json` (oder als Umgebungsvariable `ORACLE_PASSWORD`) eintragen.
+
 ## Einstellungen (`env`-Block)
 
 | Variable | Default | Bedeutung |
