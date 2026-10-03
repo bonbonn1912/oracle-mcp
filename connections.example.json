@@ -1,0 +1,27 @@
+{
+  "connections": {
+    "local": {
+      "description": "Lokale Datenbank, volle Rechte",
+      "host": "localhost",
+      "port": 1521,
+      "service": "XEPDB1",
+      "user": "sys",
+      "privilege": "SYSDBA",
+      "readOnly": false
+    },
+    "db1": {
+      "description": "Wofür diese Datenbank da ist",
+      "host": "db1.example.com",
+      "port": 1521,
+      "service": "SERVICE1",
+      "user": "benutzer1"
+    },
+    "db2": {
+      "description": "Wofür diese Datenbank da ist",
+      "host": "db2.example.com",
+      "port": 1521,
+      "service": "SERVICE2",
+      "user": "benutzer2"
+    }
+  }
+}

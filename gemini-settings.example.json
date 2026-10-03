@@ -2,16 +2,10 @@
   "mcpServers": {
     "oracle": {
       "command": "node",
-      "args": ["dist/index.js"],
-      "cwd": "/Users/dominik/Developer/github/oracle-mcp",
-      "env": {
-        "ORACLE_HOST": "localhost",
-        "ORACLE_PORT": "1521",
-        "ORACLE_SERVICE": "XEPDB1",
-        "ORACLE_USER": "sys",
-        "ORACLE_PASSWORD": "${ORACLE_PASSWORD}",
-        "ORACLE_PRIVILEGE": "SYSDBA"
-      },
+      "args": [
+        "dist/index.js"
+      ],
+      "cwd": "/pfad/zu/oracle-mcp",
       "timeout": 120000,
       "trust": false
     }

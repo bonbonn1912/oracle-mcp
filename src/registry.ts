@@ -13,9 +13,20 @@ export interface ParamDef {
   enum?: readonly string[];
 }
 
+/** Access to the configured connections (default "local" plus servers from connections.json). */
+export interface ConnectionManager {
+  list(): Config[];
+  active(): string;
+  setActive(name: string): void;
+  isOpen(name: string): boolean;
+}
+
 export interface Ctx {
+  /** Database session of the connection this call is routed to. */
   db: Db;
+  /** Settings of that connection. */
   config: Config;
+  connections: ConnectionManager;
 }
 
 export type Args = Record<string, any>;
@@ -27,6 +38,8 @@ export interface ToolDef {
   risk: Risk;
   /** Maintenance work that may run for minutes: the per-call timeout is lifted. */
   long?: boolean;
+  /** Tool does not talk to a database, so it gets no "connection" parameter. */
+  noConnection?: boolean;
   params: Record<string, ParamDef>;
   handler: (args: Args, ctx: Ctx) => Promise<unknown>;
 }
@@ -47,8 +60,14 @@ export function toolDescription(t: ToolDef): string {
   return `${t.description} [${RISK_LABEL[t.risk]}]`;
 }
 
-export function inputSchema(t: ToolDef): Record<string, unknown> {
+export const CONNECTION_PARAM_DESCRIPTION =
+  "Optional: name of the database connection to use for this call (see oracle_list_connections). Default: the active connection.";
+
+export function inputSchema(t: ToolDef, withConnection = false): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
+  if (withConnection && !t.noConnection && !("connection" in t.params)) {
+    properties.connection = { type: "string", description: CONNECTION_PARAM_DESCRIPTION };
+  }
   const required: string[] = [];
   for (const [name, p] of Object.entries(t.params)) {
     if (p.type === "string[]") {

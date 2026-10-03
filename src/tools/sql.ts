@@ -92,6 +92,9 @@ export const sqlTools: ToolDef[] = [
       if (!isQuery(sql)) {
         throw new ToolError("oracle_query only accepts SELECT / WITH statements. Use oracle_execute for DML, DDL or PL/SQL.");
       }
+      if (config.readOnly && /\bFOR\s+UPDATE\b/i.test(stripSql(sql))) {
+        throw new ToolError("SELECT ... FOR UPDATE takes row locks and is not allowed in read-only mode.");
+      }
       const max = clamp(a.max_rows, config.maxRows, config.maxRows);
       const offset = Math.max(0, Math.floor(a.offset ?? 0));
       const res = await db.table(sql, parseBinds(a.binds_json), max, offset);

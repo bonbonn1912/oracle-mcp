@@ -1,7 +1,7 @@
 /** One long-lived database session with helpers for queries and statements. */
 
 import oracledb from "oracledb";
-import type { Config } from "./config.js";
+import { type Config, dotEnvPath } from "./config.js";
 import { type Binds, normalizeValue, ToolError } from "./util.js";
 
 oracledb.fetchAsString = [oracledb.CLOB, oracledb.NCLOB];
@@ -38,8 +38,13 @@ export class Db {
   public reconnectNotice: string | null = null;
   private hadConnection = false;
   private timeoutOverrideMs: number | null = null;
+  private dictMode: "dba" | "all" | null = null;
 
-  constructor(private readonly config: Config) {}
+  constructor(public readonly config: Config) {}
+
+  get isOpen(): boolean {
+    return this.conn !== null;
+  }
 
   async connection(): Promise<oracledb.Connection> {
     if (this.conn) {
@@ -51,6 +56,12 @@ export class Db {
       }
       if (healthy) return this.conn;
       await this.drop();
+    }
+    if (!this.config.password) {
+      throw new ToolError(
+        `No password configured for connection "${this.config.name}". Put ${this.config.passwordVar}=... into ${dotEnvPath()}` +
+          (this.config.passwordVar === "ORACLE_PASSWORD" ? " or into the env block of the MCP server entry in settings.json." : ".")
+      );
     }
     const attrs: oracledb.ConnectionAttributes = {
       user: this.config.user,
@@ -88,9 +99,28 @@ export class Db {
     }
   }
 
+  /**
+   * "dba" when the session may read the DBA_* dictionary views, otherwise "all": then the ALL_* views
+   * are used, which only show what the connected user is allowed to see.
+   */
+  async dict(): Promise<"dba" | "all"> {
+    if (this.config.dictionary !== "auto") return this.config.dictionary;
+    if (this.dictMode) return this.dictMode;
+    try {
+      await this.exec("SELECT 1 FROM dba_users WHERE ROWNUM = 1", {}, false);
+      this.dictMode = "dba";
+    } catch (err) {
+      const num = (err as { errorNum?: number }).errorNum;
+      if (num !== 942 && num !== 1031) throw err;
+      this.dictMode = "all";
+    }
+    return this.dictMode;
+  }
+
   private async drop(): Promise<void> {
     const c = this.conn;
     this.conn = null;
+    this.dictMode = null;
     if (c) {
       try {
         await c.close();

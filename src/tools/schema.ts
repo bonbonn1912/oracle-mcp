@@ -3,7 +3,7 @@
 import { clamp, type ToolDef } from "../registry.js";
 import { dictName, likePattern, ToolError } from "../util.js";
 
-const USER_SCHEMAS = "(SELECT username FROM dba_users WHERE oracle_maintained = 'N')";
+const userSchemas = (d: string): string => `(SELECT username FROM ${d}_users WHERE oracle_maintained = 'N')`;
 
 function columnType(c: Record<string, any>): string {
   const t = String(c.data_type);
@@ -44,12 +44,31 @@ export const schemaTools: ToolDef[] = [
       name_like: { type: "string", description: "Filter on the schema name, e.g. HR or APP%. Case-insensitive." },
     },
     handler: async (a, { db }) => {
+      const d = await db.dict();
+      if (d === "all") {
+        // ordinary user: only schemas in which the user can see at least one object, plus the own schema
+        const visible = await db.list(
+          `SELECT u.username, u.created, u.oracle_maintained, NVL(o.object_count, 0) AS visible_objects
+             FROM all_users u
+             LEFT JOIN (SELECT owner, COUNT(*) AS object_count FROM all_objects GROUP BY owner) o ON o.owner = u.username
+            WHERE (:inc = 1 OR u.oracle_maintained = 'N')
+              AND (:pat IS NULL OR UPPER(u.username) LIKE UPPER(:pat))
+              AND (NVL(o.object_count, 0) > 0 OR u.username = USER)
+            ORDER BY CASE WHEN u.username = USER THEN 0 ELSE 1 END, u.username`,
+          { inc: a.include_oracle_maintained ? 1 : 0, pat: likePattern(a.name_like) }
+        );
+        return {
+          container: await db.currentContainer(),
+          note: "Limited view: only schemas with objects visible to the connected user; sizes need DBA dictionary access.",
+          ...visible,
+        };
+      }
       const res = await db.list(
         `SELECT u.username, u.account_status, u.default_tablespace, u.temporary_tablespace, u.created,
                 u.oracle_maintained, NVL(o.object_count, 0) AS object_count, NVL(s.size_mb, 0) AS size_mb
-           FROM dba_users u
-           LEFT JOIN (SELECT owner, COUNT(*) AS object_count FROM dba_objects GROUP BY owner) o ON o.owner = u.username
-           LEFT JOIN (SELECT owner, ROUND(SUM(bytes)/1048576, 1) AS size_mb FROM dba_segments GROUP BY owner) s ON s.owner = u.username
+           FROM ${d}_users u
+           LEFT JOIN (SELECT owner, COUNT(*) AS object_count FROM ${d}_objects GROUP BY owner) o ON o.owner = u.username
+           LEFT JOIN (SELECT owner, ROUND(SUM(bytes)/1048576, 1) AS size_mb FROM ${d}_segments GROUP BY owner) s ON s.owner = u.username
           WHERE (:inc = 1 OR u.oracle_maintained = 'N')
             AND (:pat IS NULL OR UPPER(u.username) LIKE UPPER(:pat))
           ORDER BY u.oracle_maintained, u.username`,
@@ -73,6 +92,7 @@ export const schemaTools: ToolDef[] = [
       max_rows: { type: "number", description: "Maximum rows (default ORACLE_MAX_ROWS)." },
     },
     handler: async (a, { db, config }) => {
+      const d = await db.dict();
       const schema = dictName(a.schema, "schema");
       const binds: Record<string, unknown> = { o: schema, pat: likePattern(a.name_like) };
       let typeFilter = "";
@@ -85,18 +105,18 @@ export const schemaTools: ToolDef[] = [
       }
       const res = await db.list(
         `SELECT object_name, object_type, status, created, last_ddl_time, temporary
-           FROM dba_objects
+           FROM ${d}_objects
           WHERE owner = :o AND (:pat IS NULL OR UPPER(object_name) LIKE UPPER(:pat)) ${typeFilter}
           ORDER BY object_type, object_name`,
         binds,
         clamp(a.max_rows, config.maxRows, config.maxRows)
       );
       const counts = await db.rows(
-        "SELECT object_type, COUNT(*) AS cnt FROM dba_objects WHERE owner = :o GROUP BY object_type ORDER BY object_type",
+        `SELECT object_type, COUNT(*) AS cnt FROM ${d}_objects WHERE owner = :o GROUP BY object_type ORDER BY object_type`,
         { o: schema }
       );
       if (counts.length === 0) {
-        const exists = await db.one("SELECT 1 AS x FROM dba_users WHERE username = :o", { o: schema });
+        const exists = await db.one(`SELECT 1 AS x FROM ${d}_users WHERE username = :o`, { o: schema });
         if (!exists) throw new ToolError(`Schema ${schema} does not exist in container ${await db.currentContainer()}.`);
       }
       return { schema, totalsByType: Object.fromEntries(counts.map((c) => [c.object_type, c.cnt])), ...res };
@@ -112,11 +132,12 @@ export const schemaTools: ToolDef[] = [
       table: { type: "string", description: "Table, view or materialized view name.", required: true },
     },
     handler: async (a, { db }) => {
+      const d = await db.dict();
       const o = dictName(a.schema, "schema");
       const t = dictName(a.table, "table");
       const b = { o, t };
       const obj = await db.rows(
-        `SELECT object_type, status, created, last_ddl_time FROM dba_objects
+        `SELECT object_type, status, created, last_ddl_time FROM ${d}_objects
           WHERE owner = :o AND object_name = :t AND object_type IN ('TABLE','VIEW','MATERIALIZED VIEW')`,
         b
       );
@@ -129,8 +150,8 @@ export const schemaTools: ToolDef[] = [
         `SELECT c.column_id, c.column_name, c.data_type, c.data_length, c.data_precision, c.data_scale,
                 c.char_length, c.char_used, c.nullable, c.data_default, c.virtual_column, c.identity_column,
                 m.comments
-           FROM dba_tab_cols c
-           LEFT JOIN dba_col_comments m
+           FROM ${d}_tab_cols c
+           LEFT JOIN ${d}_col_comments m
              ON m.owner = c.owner AND m.table_name = c.table_name AND m.column_name = c.column_name
           WHERE c.owner = :o AND c.table_name = :t AND c.hidden_column = 'NO'
           ORDER BY c.column_id`,
@@ -152,25 +173,25 @@ export const schemaTools: ToolDef[] = [
       const info = await db.one(
         `SELECT tablespace_name, num_rows, blocks, avg_row_len, last_analyzed, partitioned, temporary,
                 compression, row_movement, iot_type
-           FROM dba_tables WHERE owner = :o AND table_name = :t`,
+           FROM ${d}_tables WHERE owner = :o AND table_name = :t`,
         b
       );
       const comment = await db.scalar<string>(
-        "SELECT comments FROM dba_tab_comments WHERE owner = :o AND table_name = :t AND ROWNUM = 1",
+        `SELECT comments FROM ${d}_tab_comments WHERE owner = :o AND table_name = :t AND ROWNUM = 1`,
         b
       );
       const constraints = await db.rows(
         `SELECT c.constraint_name, c.constraint_type, c.status, c.validated, c.search_condition_vc AS condition,
                 c.delete_rule, c.r_owner, c.r_constraint_name,
                 (SELECT LISTAGG(cc.column_name, ', ') WITHIN GROUP (ORDER BY cc.position)
-                   FROM dba_cons_columns cc
+                   FROM ${d}_cons_columns cc
                   WHERE cc.owner = c.owner AND cc.constraint_name = c.constraint_name AND cc.table_name = c.table_name) AS column_names,
-                (SELECT r.table_name FROM dba_constraints r
+                (SELECT r.table_name FROM ${d}_constraints r
                   WHERE r.owner = c.r_owner AND r.constraint_name = c.r_constraint_name) AS r_table,
                 (SELECT LISTAGG(rc.column_name, ', ') WITHIN GROUP (ORDER BY rc.position)
-                   FROM dba_cons_columns rc
+                   FROM ${d}_cons_columns rc
                   WHERE rc.owner = c.r_owner AND rc.constraint_name = c.r_constraint_name) AS r_columns
-           FROM dba_constraints c
+           FROM ${d}_constraints c
           WHERE c.owner = :o AND c.table_name = :t
           ORDER BY c.constraint_type, c.constraint_name`,
         b
@@ -197,33 +218,33 @@ export const schemaTools: ToolDef[] = [
       const indexes = await db.rows(
         `SELECT i.owner, i.index_name, i.index_type, i.uniqueness, i.status, i.tablespace_name, i.partitioned,
                 (SELECT LISTAGG(ic.column_name, ', ') WITHIN GROUP (ORDER BY ic.column_position)
-                   FROM dba_ind_columns ic
+                   FROM ${d}_ind_columns ic
                   WHERE ic.index_owner = i.owner AND ic.index_name = i.index_name) AS column_names
-           FROM dba_indexes i
+           FROM ${d}_indexes i
           WHERE i.table_owner = :o AND i.table_name = :t
           ORDER BY i.index_name`,
         b
       );
-      const sizes = await db.one(
+      const sizes = d !== "dba" ? null : await db.one(
         `SELECT ROUND(NVL(SUM(CASE WHEN kind = 'T' THEN bytes END), 0)/1048576, 2) AS table_mb,
                 ROUND(NVL(SUM(CASE WHEN kind = 'I' THEN bytes END), 0)/1048576, 2) AS index_mb,
                 ROUND(NVL(SUM(CASE WHEN kind = 'L' THEN bytes END), 0)/1048576, 2) AS lob_mb
            FROM (
-             SELECT 'T' AS kind, s.bytes FROM dba_segments s
+             SELECT 'T' AS kind, s.bytes FROM ${d}_segments s
               WHERE s.owner = :o AND s.segment_name = :t AND s.segment_type LIKE 'TABLE%'
              UNION ALL
-             SELECT 'I', s.bytes FROM dba_segments s
-               JOIN dba_indexes i ON i.owner = s.owner AND i.index_name = s.segment_name
+             SELECT 'I', s.bytes FROM ${d}_segments s
+               JOIN ${d}_indexes i ON i.owner = s.owner AND i.index_name = s.segment_name
               WHERE i.table_owner = :o AND i.table_name = :t AND s.segment_type LIKE 'INDEX%'
              UNION ALL
-             SELECT 'L', s.bytes FROM dba_segments s
-               JOIN dba_lobs l ON l.owner = s.owner AND (l.segment_name = s.segment_name OR l.index_name = s.segment_name)
+             SELECT 'L', s.bytes FROM ${d}_segments s
+               JOIN ${d}_lobs l ON l.owner = s.owner AND (l.segment_name = s.segment_name OR l.index_name = s.segment_name)
               WHERE l.owner = :o AND l.table_name = :t AND s.segment_type LIKE 'LOB%'
            )`,
         b
       );
       const partitions = await db.scalar<number>(
-        "SELECT COUNT(*) AS c FROM dba_tab_partitions WHERE table_owner = :o AND table_name = :t",
+        `SELECT COUNT(*) AS c FROM ${d}_tab_partitions WHERE table_owner = :o AND table_name = :t`,
         b
       );
       return {
@@ -253,6 +274,7 @@ export const schemaTools: ToolDef[] = [
       include_storage: { type: "boolean", description: "Include storage, tablespace and segment clauses (default false)." },
     },
     handler: async (a, { db }) => {
+      const d = await db.dict();
       const rawType = String(a.object_type).trim().toUpperCase().replace(/\s+/g, " ");
       if (!/^[A-Z][A-Z _]*$/.test(rawType)) throw new ToolError(`Invalid object_type: ${a.object_type}`);
       const type = DDL_TYPE_MAP[rawType] ?? rawType.replace(/ /g, "_");
@@ -292,15 +314,16 @@ export const schemaTools: ToolDef[] = [
       max_rows: { type: "number", description: "Maximum rows (default ORACLE_MAX_ROWS)." },
     },
     handler: async (a, { db, config }) => {
+      const d = await db.dict();
       const pat = likePattern(a.pattern);
       const schema = a.schema ? dictName(a.schema, "schema") : null;
       const max = clamp(a.max_rows, config.maxRows, config.maxRows);
       const binds = { pat, s: schema };
-      const where = (col: string): string => `(:s IS NOT NULL AND ${col} = :s OR :s IS NULL AND ${col} IN ${USER_SCHEMAS})`;
+      const where = (col: string): string => `(:s IS NOT NULL AND ${col} = :s OR :s IS NULL AND ${col} IN ${userSchemas(d)})`;
       const mode = a.search_in ?? "NAMES";
       if (mode === "NAMES") {
         return db.list(
-          `SELECT owner, object_name, object_type, status, last_ddl_time FROM dba_objects
+          `SELECT owner, object_name, object_type, status, last_ddl_time FROM ${d}_objects
             WHERE UPPER(object_name) LIKE UPPER(:pat) AND ${where("owner")}
             ORDER BY owner, object_type, object_name`,
           binds,
@@ -309,7 +332,7 @@ export const schemaTools: ToolDef[] = [
       }
       if (mode === "COLUMNS") {
         return db.list(
-          `SELECT owner, table_name, column_name, data_type FROM dba_tab_columns
+          `SELECT owner, table_name, column_name, data_type FROM ${d}_tab_columns
             WHERE UPPER(column_name) LIKE UPPER(:pat) AND ${where("owner")}
             ORDER BY owner, table_name, column_id`,
           binds,
@@ -317,7 +340,7 @@ export const schemaTools: ToolDef[] = [
         );
       }
       return db.list(
-        `SELECT owner, name, type, line, RTRIM(SUBSTR(text, 1, 400), CHR(10)) AS text FROM dba_source
+        `SELECT owner, name, type, line, RTRIM(SUBSTR(text, 1, 400), CHR(10)) AS text FROM ${d}_source
           WHERE UPPER(text) LIKE UPPER(:pat) AND ${where("owner")}
           ORDER BY owner, name, type, line`,
         binds,
@@ -336,6 +359,7 @@ export const schemaTools: ToolDef[] = [
       direction: { type: "string", description: "USES = objects this one references, USED_BY = objects referencing this one (default USED_BY).", enum: ["USES", "USED_BY"] },
     },
     handler: async (a, { db, config }) => {
+      const d = await db.dict();
       const o = dictName(a.schema, "schema");
       const n = dictName(a.object_name, "object name");
       const dir = a.direction ?? "USED_BY";
@@ -344,13 +368,13 @@ export const schemaTools: ToolDef[] = [
         dir === "USES"
           ? await db.list(
               `SELECT type AS object_type, referenced_owner, referenced_name, referenced_type, referenced_link_name
-                 FROM dba_dependencies WHERE owner = :o AND name = :n
+                 FROM ${d}_dependencies WHERE owner = :o AND name = :n
                 ORDER BY referenced_owner, referenced_name`,
               b,
               config.maxRows
             )
           : await db.list(
-              `SELECT owner, name, type, dependency_type FROM dba_dependencies
+              `SELECT owner, name, type, dependency_type FROM ${d}_dependencies
                 WHERE referenced_owner = :o AND referenced_name = :n
                 ORDER BY owner, name`,
               b,
@@ -360,16 +384,16 @@ export const schemaTools: ToolDef[] = [
         dir === "USES"
           ? await db.rows(
               `SELECT c.constraint_name, r.owner AS parent_owner, r.table_name AS parent_table, c.delete_rule, c.status
-                 FROM dba_constraints c
-                 JOIN dba_constraints r ON r.owner = c.r_owner AND r.constraint_name = c.r_constraint_name
+                 FROM ${d}_constraints c
+                 JOIN ${d}_constraints r ON r.owner = c.r_owner AND r.constraint_name = c.r_constraint_name
                 WHERE c.constraint_type = 'R' AND c.owner = :o AND c.table_name = :n
                 ORDER BY r.owner, r.table_name`,
               b
             )
           : await db.rows(
               `SELECT c.owner AS child_owner, c.table_name AS child_table, c.constraint_name, c.delete_rule, c.status
-                 FROM dba_constraints c
-                 JOIN dba_constraints r ON r.owner = c.r_owner AND r.constraint_name = c.r_constraint_name
+                 FROM ${d}_constraints c
+                 JOIN ${d}_constraints r ON r.owner = c.r_owner AND r.constraint_name = c.r_constraint_name
                 WHERE c.constraint_type = 'R' AND r.owner = :o AND r.table_name = :n
                 ORDER BY c.owner, c.table_name`,
               b
@@ -383,15 +407,16 @@ export const schemaTools: ToolDef[] = [
     risk: "R",
     params: { schema: { type: "string", description: "Restrict to one schema (default: all schemas)." } },
     handler: async (a, { db, config }) => {
+      const d = await db.dict();
       const s = a.schema ? dictName(a.schema, "schema") : null;
       return db.list(
         `SELECT o.owner, o.object_name, o.object_type, o.last_ddl_time,
                 (SELECT LISTAGG('line ' || e.line || ': ' || RTRIM(e.text, CHR(10)), ' | ' ON OVERFLOW TRUNCATE)
                           WITHIN GROUP (ORDER BY e.sequence)
-                   FROM dba_errors e
+                   FROM ${d}_errors e
                   WHERE e.owner = o.owner AND e.name = o.object_name AND e.type = o.object_type
                     AND e.attribute = 'ERROR') AS errors
-           FROM dba_objects o
+           FROM ${d}_objects o
           WHERE o.status = 'INVALID' AND (:s IS NULL OR o.owner = :s)
           ORDER BY o.owner, o.object_type, o.object_name`,
         { s },
@@ -407,9 +432,10 @@ export const schemaTools: ToolDef[] = [
     risk: "W",
     params: { schema: { type: "string", description: "Schema to recompile (default: whole database)." } },
     handler: async (a, { db }) => {
+      const d = await db.dict();
       const s = a.schema ? dictName(a.schema, "schema") : null;
       const count = (): Promise<number | null> =>
-        db.scalar<number>("SELECT COUNT(*) AS c FROM dba_objects WHERE status = 'INVALID' AND (:s IS NULL OR owner = :s)", { s });
+        db.scalar<number>(`SELECT COUNT(*) AS c FROM ${d}_objects WHERE status = 'INVALID' AND (:s IS NULL OR owner = :s)`, { s });
       const before = await count();
       if (s) {
         await db.exec("BEGIN DBMS_UTILITY.COMPILE_SCHEMA(schema => :s, compile_all => FALSE); END;", { s });

@@ -1,14 +1,14 @@
 # oracle-mcp – Tool-Katalog
 
 MCP-Server in TypeScript für lokale Oracle-Datenbanken (21c XE, auch 19c), primär für die Gemini CLI.
-Dieses Dokument beschreibt Konfiguration, Regeln und alle 52 Tools. Sie sind in `src/tools/` implementiert; Einrichtung siehe `README.md`.
+Dieses Dokument beschreibt Konfiguration, Regeln und alle 54 Tools. Sie sind in `src/tools/` implementiert; Einrichtung siehe `README.md`.
 
 ## 1. Rahmen
 
 | Punkt | Entscheidung |
 |---|---|
 | Laufzeit | Node.js >= 20, TypeScript, `@modelcontextprotocol/sdk`, Transport stdio |
-| Treiber | `node-oracledb` 6.x im Thin-Modus (kein Instant Client nötig, unterstützt `SYSDBA`, DB 12.1+) |
+| Treiber | `node-oracledb` im Thin-Modus (kein Instant Client nötig, unterstützt `SYSDBA`, DB 12.1+) |
 | Verbindung | genau eine dauerhafte Session (kein Pool), damit Container-Wechsel, `CURRENT_SCHEMA` und offene Transaktionen zwischen Tool-Calls erhalten bleiben; automatischer Reconnect |
 | Login | entspricht `sqlplus sys@localhost:1521/<service> as sysdba` |
 | Versionen | 19c und 21c; Unterschiede (z. B. XE-Limits, Unified Audit) werden zur Laufzeit über `V$VERSION` / `V$INSTANCE` erkannt |
@@ -21,7 +21,7 @@ Dieses Dokument beschreibt Konfiguration, Regeln und alle 52 Tools. Sie sind in 
     "oracle": {
       "command": "node",
       "args": ["dist/index.js"],
-      "cwd": "/Users/dominik/Developer/github/oracle-mcp",
+      "cwd": "/pfad/zu/oracle-mcp",
       "env": {
         "ORACLE_HOST": "localhost",
         "ORACLE_PORT": "1521",
@@ -48,8 +48,11 @@ Dieses Dokument beschreibt Konfiguration, Regeln und alle 52 Tools. Sie sind in 
 | `ORACLE_SERVICE` | nein | `XEPDB1` | Service-Name: `XEPDB1` (PDB, XE-Standard) oder `XE` (CDB-Root) |
 | `ORACLE_CONNECT_STRING` | nein | – | kompletter Easy-Connect-String; überschreibt Host/Port/Service |
 | `ORACLE_USER` | nein | `sys` | Benutzer |
-| `ORACLE_PASSWORD` | ja | – | Passwort; wird nie geloggt oder in Tool-Antworten ausgegeben |
+| `ORACLE_PASSWORD` | ja | – | Passwort; wird nie geloggt oder in Tool-Antworten ausgegeben. Kann statt im `env`-Block auch in einer `.env` neben `dist/` stehen |
 | `ORACLE_PRIVILEGE` | nein | `SYSDBA` wenn User `sys`, sonst leer | `SYSDBA`, `SYSOPER` oder leer |
+| `ORACLE_DICTIONARY` | nein | `auto` | `dba` = `DBA_*`-Views, `all` = `ALL_*`-Views (nur was der Benutzer sieht), `auto` = beim ersten Aufruf erkennen |
+| `ORACLE_DEFAULT_CONNECTION` | nein | `local` | Verbindung, die beim Start aktiv ist |
+| `ORACLE_CONNECTIONS_FILE` | nein | `connections.json` | Datei mit den Server-Verbindungen neben `dist/` |
 | `ORACLE_READ_ONLY` | nein | `false` | `true` registriert nur lesende Tools |
 | `ORACLE_MAX_ROWS` | nein | `200` | Obergrenze für Zeilen pro Antwort |
 | `ORACLE_CALL_TIMEOUT_MS` | nein | `60000` | Timeout pro Datenbank-Roundtrip; Wartungs-Tools (Gruppe F, Kompilieren, Export) laufen ohne Timeout |
@@ -88,6 +91,8 @@ Legende: Parameter mit `*` sind Pflicht. Klasse siehe oben.
 
 | # | Tool | Klasse | Parameter | Zweck |
 |---|---|---|---|---|
+| 0a | `oracle_list_connections` | R | – | alle konfigurierten Verbindungen (`local` plus Server aus `connections.json`) mit Beschreibung, Ziel, Nur-Lese-Status und aktiver Verbindung |
+| 0b | `oracle_use_connection` | R | `connection*` | macht eine andere Verbindung aktiv; testet sie vorher, bei Fehler bleibt die bisherige aktiv |
 | 1 | `oracle_connection_info` | R | – | Verbindungstest; liefert Version, Edition, Instanz, aktuellen Container, User, Privileg, `CURRENT_SCHEMA`, offene Transaktion ja/nein |
 | 2 | `oracle_list_containers` | R | – | CDB-Root und alle PDBs mit Open-Mode, Größe, Restricted-Status (`V$CONTAINERS`) |
 | 3 | `oracle_switch_container` | W | `container*` | `ALTER SESSION SET CONTAINER`, z. B. zwischen `CDB$ROOT` und `XEPDB1` |
@@ -178,6 +183,20 @@ Bei 8–10 gilt die Vorschau-Regel nur, wenn das SQL als destruktiv erkannt wird
 |---|---|---|---|---|
 | 52 | `oracle_export_query` | R | `sql*`, `format*` (`CSV`, `JSON`), `filename*`, `binds_json` | Ergebnis ohne Zeilenlimit gestreamt in eine Datei unter `ORACLE_EXPORT_DIR` schreiben; Antwort enthält Pfad und Zeilenzahl |
 
+## 3a. Mehrere Datenbanken
+
+- Alle Verbindungen stehen in `connections.json` neben `dist/` (Felder siehe `README.md`), die Passwörter in der
+  `.env` (`ORACLE_PASSWORD` für `local`, `ORACLE_PASSWORD_<NAME>` für Server). `local` ist die Standardverbindung;
+  ohne eigenen Eintrag gelten für sie die `ORACLE_*`-Variablen aus dem `env`-Block.
+- Sind mehrere Verbindungen konfiguriert, hat jedes Tool den optionalen Parameter `connection`. Ohne ihn läuft der
+  Aufruf gegen die aktive Verbindung (`oracle_use_connection`). Jede Antwort nennt ihre Verbindung im Feld `connection`.
+- Server sind standardmäßig nur lesbar (`"readOnly": false` hebt das auf). Schreibende Tools werden dort mit
+  `READ_ONLY` abgelehnt.
+- Ohne DBA-Sicht nutzt der Server die `ALL_*`-Views und zeigt nur, was der Benutzer sehen darf. Dann arbeiten
+  0a, 0b, 1, 7, 11, 12–18, 20, 24 und 52; `oracle_list_schemas` zeigt nur Schemas mit sichtbaren Objekten,
+  `oracle_list_privileges` nur die eigenen Rechte, Größenangaben entfallen. Die übrigen lesenden Tools
+  (2, 26–32, 44, 46–48, 50) brauchen `SELECT_CATALOG_ROLE` oder `SELECT ANY DICTIONARY`.
+
 ## 4. Bewusst nicht enthalten
 
 - **Instanz starten/stoppen** (`STARTUP`, `SHUTDOWN`): im Thin-Modus nicht möglich und bei gestoppter Instanz gibt es keinen Listener-Service zum Verbinden. Das bleibt bei `sqlplus` bzw. dem Windows-/systemd-Dienst.
@@ -186,6 +205,6 @@ Bei 8–10 gilt die Vorschau-Regel nur, wenn das SQL als destruktiv erkannt wird
 
 ## 5. Stand
 
-- Alle 52 Tools sind implementiert; mit `ORACLE_READ_ONLY=true` werden nur die 26 lesenden angeboten.
+- Alle 54 Tools sind implementiert; mit `ORACLE_READ_ONLY=true` werden nur die 28 lesenden angeboten.
 - Der Service-Name kommt aus `ORACLE_SERVICE` in der `settings.json`, Standard ist `XEPDB1`.
 - Geprüft sind Build, Tool-Liste, Schemas, Argument-Prüfung und der Skript-Splitter. Ein Lauf gegen eine echte Oracle-Datenbank steht noch aus.

@@ -39,7 +39,13 @@ export const userTools: ToolDef[] = [
       include_oracle_maintained: { type: "boolean", description: "Also list Oracle-maintained users (default false)." },
     },
     handler: async (a, { db }) =>
-      db.list(
+      (await db.dict()) === "all"
+        ? db.list(
+            `SELECT username, created, common, oracle_maintained FROM all_users
+              WHERE (:inc = 1 OR oracle_maintained = 'N') ORDER BY oracle_maintained, username`,
+            { inc: a.include_oracle_maintained ? 1 : 0 }
+          )
+        : db.list(
         `SELECT username, account_status, profile, default_tablespace, temporary_tablespace, created,
                 expiry_date, lock_date, last_login, authentication_type, common, oracle_maintained
            FROM dba_users
@@ -176,6 +182,31 @@ export const userTools: ToolDef[] = [
     handler: async (a, { db, config }) => {
       const g = String(a.grantee).trim().toUpperCase() === "PUBLIC" ? "PUBLIC" : dictName(a.grantee, "grantee");
       const b = { g };
+      if ((await db.dict()) === "all") {
+        const me = await db.scalar<string>("SELECT USER AS u FROM dual");
+        if (g !== me) {
+          throw new ToolError(`Without DBA dictionary access only the privileges of the connected user (${me}) can be shown.`);
+        }
+        const objPrivs = await db.list(
+          `SELECT owner, table_name AS object_name, type AS object_type, privilege, grantable
+             FROM user_tab_privs_recd ORDER BY owner, table_name, privilege`,
+          {},
+          config.maxRows
+        );
+        return {
+          grantee: g,
+          systemPrivileges: await db.rows("SELECT privilege, admin_option FROM user_sys_privs ORDER BY privilege"),
+          roles: await db.rows("SELECT granted_role, admin_option, default_role FROM user_role_privs ORDER BY granted_role"),
+          activeRoles: (await db.rows("SELECT role FROM session_roles ORDER BY role")).map((r) => r.role),
+          objectPrivileges: objPrivs.rows,
+          objectPrivilegesTruncated: objPrivs.truncated,
+          quotas: await db.rows(
+            `SELECT tablespace_name, ROUND(bytes/1048576, 1) AS used_mb,
+                    CASE WHEN max_bytes = -1 THEN 'UNLIMITED' ELSE TO_CHAR(ROUND(max_bytes/1048576, 1)) END AS max_mb
+               FROM user_ts_quotas`
+          ),
+        };
+      }
       const systemPrivileges = await db.rows(
         "SELECT privilege, admin_option FROM dba_sys_privs WHERE grantee = :g ORDER BY privilege",
         b

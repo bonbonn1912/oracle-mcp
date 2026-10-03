@@ -3,7 +3,61 @@
 import type { ToolDef } from "../registry.js";
 import { dictName, plainName, q, ToolError } from "../util.js";
 
+function target(c: { user: string; connectString: string; privilege: string }): string {
+  return `${c.user}@${c.connectString}${c.privilege ? ` as ${c.privilege}` : ""}`;
+}
+
 export const sessionTools: ToolDef[] = [
+  {
+    name: "oracle_list_connections",
+    description:
+      "Lists the configured database connections: the default \"local\" plus any servers. Shows which one is active, where each points to and whether it is read-only. Call this to find out which databases exist before choosing one.",
+    risk: "R",
+    noConnection: true,
+    params: {},
+    handler: async (_a, { connections }) => {
+      const active = connections.active();
+      return {
+        active,
+        connections: connections.list().map((c) => ({
+          name: c.name,
+          description: c.description || undefined,
+          target: target(c),
+          readOnly: c.readOnly,
+          active: c.name === active,
+          connected: connections.isOpen(c.name),
+          passwordConfigured: c.password !== "",
+        })),
+        usage:
+          "Tools run against the active connection. Switch it with oracle_use_connection, or pass the \"connection\" parameter to a single tool call.",
+      };
+    },
+  },
+  {
+    name: "oracle_use_connection",
+    description:
+      "Makes another configured connection the active one for all following tool calls (e.g. switch from local to a server and back). Tests the connection first; on failure the active connection stays unchanged.",
+    risk: "R",
+    params: {
+      connection: { type: "string", description: "Connection name from oracle_list_connections, e.g. local.", required: true },
+    },
+    handler: async (_a, { db, config, connections }) => {
+      const previous = connections.active();
+      // index.ts already routed this call to the requested connection; make sure it works
+      const who = await db.one(
+        "SELECT SYS_CONTEXT('USERENV','SESSION_USER') AS session_user, SYS_CONTEXT('USERENV','CON_NAME') AS container, SYS_CONTEXT('USERENV','DB_NAME') AS db_name FROM dual"
+      );
+      connections.setActive(config.name);
+      return {
+        active: config.name,
+        previous,
+        description: config.description || undefined,
+        target: target(config),
+        readOnly: config.readOnly,
+        session: who,
+      };
+    },
+  },
   {
     name: "oracle_connection_info",
     description:
@@ -37,10 +91,13 @@ export const sessionTools: ToolDef[] = [
       }
       return {
         connected: true,
+        connection: config.name,
+        description: config.description || undefined,
         connectString: config.connectString,
         configuredUser: config.user,
         privilege: config.privilege || "NONE",
         readOnlyMode: config.readOnly,
+        dictionaryViews: (await db.dict()) === "dba" ? "DBA_* (full view)" : "ALL_* (only what this user may see)",
         session: { ...session, transaction_open: session?.transaction_id != null },
         instance,
         database,
@@ -88,7 +145,7 @@ export const sessionTools: ToolDef[] = [
     params: { schema: { type: "string", description: "Schema name.", required: true } },
     handler: async (a, { db }) => {
       const schema = dictName(a.schema, "schema");
-      const exists = await db.one("SELECT username FROM dba_users WHERE username = :u", { u: schema });
+      const exists = await db.one(`SELECT username FROM ${await db.dict()}_users WHERE username = :u`, { u: schema });
       if (!exists) throw new ToolError(`Schema ${schema} does not exist in container ${await db.currentContainer()}.`);
       await db.exec(`ALTER SESSION SET CURRENT_SCHEMA = ${q(a.schema, "schema")}`);
       return { current_schema: schema };
