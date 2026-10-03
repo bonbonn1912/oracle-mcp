@@ -153,6 +153,8 @@ die das fehlende Recht nennt.
 
 Der Nur-Lese-Modus ist eine Schranke im MCP-Server. Wirklich garantiert ist er erst, wenn der Datenbankbenutzer
 selbst nur Leserechte hat.
+Ungültige Werte für `readOnly` oder `ORACLE_READ_ONLY` führen zu einem Konfigurationsfehler.
+`SELECT ... FOR UPDATE` ist im Nur-Lese-Modus auch beim Export gesperrt.
 
 ## Einstellungen über Umgebungsvariablen
 
@@ -209,3 +211,20 @@ src/tools/*.ts        die 54 Tools in 8 Gruppen
 ```
 
 Ein neues Tool ist ein weiterer Eintrag in einer der Listen unter `src/tools/`.
+
+Abgebrochene Tool-Aufrufe werden vor dem Start ihrer Ausführung aus der Warteschlange übersprungen.
+Bereits laufende Datenbankoperationen werden dadurch nicht automatisch abgebrochen.
+Interne Objektabfragen mit mehr als 5.000 Ergebnissen melden einen Fehler, damit Wartungs-Tools
+keine unvollständige Objektliste verarbeiten. In diesem Fall die Auswahl weiter einschränken.
+Exporte werden erst nach erfolgreichem Abschluss an ihrem Ziel veröffentlicht; bei einem Fehler
+bleibt eine vorhandene Exportdatei erhalten.
+
+## Tests
+
+```bash
+npm test
+```
+
+Der Befehl baut den Server und führt die Regressionstests mit dem Node.js-Test-Runner aus.
+Die Tests verwenden simulierte Datenbankzugriffe und temporäre Dateien; eine Oracle-Datenbank
+oder Zugangsdaten werden dafür nicht benötigt.

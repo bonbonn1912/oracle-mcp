@@ -15,6 +15,7 @@ import { sessionTools } from "./tools/session.js";
 import { sqlTools } from "./tools/sql.js";
 import { storageTools } from "./tools/storage.js";
 import { userTools } from "./tools/users.js";
+import { RequestCancelledError, SerialQueue } from "./queue.js";
 import { ToolError } from "./util.js";
 
 export const ALL_TOOLS: ToolDef[] = [
@@ -120,9 +121,9 @@ async function main(): Promise<void> {
   }));
 
   // One statement at a time: tool calls are serialised.
-  let queue: Promise<unknown> = Promise.resolve();
+  const queue = new SerialQueue();
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const run = async (): Promise<ToolResult> => {
       const tool = byName.get(request.params.name);
       if (!tool) {
@@ -169,6 +170,9 @@ async function main(): Promise<void> {
           );
         }
         db.setCallTimeout(tool.long ? 0 : null);
+        if (extra.signal.aborted) {
+          throw new RequestCancelledError();
+        }
         const result = await tool.handler(args, { db, config, connections: manager });
         let payload: unknown = result;
         if (result && typeof result === "object" && !Array.isArray(result)) {
@@ -181,6 +185,9 @@ async function main(): Promise<void> {
         db.reconnectNotice = null;
         return { content: [{ type: "text", text: JSON.stringify(payload) }] };
       } catch (err) {
+        if (err instanceof RequestCancelledError) {
+          return fail({ error: "REQUEST_CANCELLED", message: err.message });
+        }
         const info = describeError(err) as unknown as Record<string, unknown>;
         if (multi) info.connection = name;
         const code = String(info.error);
@@ -196,9 +203,12 @@ async function main(): Promise<void> {
         db.setCallTimeout(null);
       }
     };
-    const next = queue.then(run, run);
-    queue = next.catch(() => undefined);
-    return next;
+    try {
+      return await queue.enqueue(run, extra.signal);
+    } catch (err) {
+      if (err instanceof RequestCancelledError) return fail({ error: "REQUEST_CANCELLED", message: err.message });
+      throw err;
+    }
   });
 
   const shutdown = async (): Promise<void> => {
