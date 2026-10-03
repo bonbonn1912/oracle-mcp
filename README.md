@@ -33,8 +33,7 @@ Danach gibt es drei Dateien:
   "mcpServers": {
     "oracle": {
       "command": "node",
-      "args": ["dist/index.js"],
-      "cwd": "/pfad/zu/oracle-mcp",
+      "args": ["/path/to/oracle-mcp/dist/index.js"],
       "timeout": 120000,
       "trust": false
     }
@@ -42,7 +41,9 @@ Danach gibt es drei Dateien:
 }
 ```
 
-`cwd` ist der Projektordner. Ein `env`-Block ist nicht nötig.
+`/path/to/oracle-mcp` durch den absoluten Pfad des Projektordners ersetzen (Windows: `C:/path/to/oracle-mcp/dist/index.js`).
+Ein `env`-Block ist nicht nötig. `connections.json`, `.env` und der Export-Ordner werden immer relativ zum Projektordner gesucht,
+egal aus welchem Verzeichnis Gemini gestartet wird.
 
 ### 2. `connections.json`
 
@@ -155,10 +156,8 @@ selbst nur Leserechte hat.
 
 ## Einstellungen über Umgebungsvariablen
 
-Alle Variablen sind optional und können im `env`-Block der `settings.json` oder in der `.env` stehen
-(der `env`-Block hat Vorrang vor der `.env`).
-
-Für alle Verbindungen:
+Diese Variablen gelten für alle Verbindungen. Sie sind optional und können in der `.env` oder im `env`-Block der
+`settings.json` stehen (der `env`-Block hat Vorrang). Die Verbindungen selbst werden nur in der `connections.json` konfiguriert.
 
 | Variable | Default | Bedeutung |
 |---|---|---|
@@ -167,20 +166,7 @@ Für alle Verbindungen:
 | `ORACLE_READ_ONLY` | `false` | `true` macht alle Verbindungen nur lesbar, auch `local` |
 | `ORACLE_MAX_ROWS` | `200` | Obergrenze für Zeilen pro Antwort |
 | `ORACLE_CALL_TIMEOUT_MS` | `60000` | Timeout pro Datenbank-Aufruf; Wartungs-Tools laufen ohne Timeout |
-| `ORACLE_EXPORT_DIR` | `./exports` | Zielordner für `oracle_export_query` |
-
-Nur für `local`, als Alternative zum Eintrag in der `connections.json` (der Eintrag dort hat Vorrang):
-
-| Variable | Default | Bedeutung |
-|---|---|---|
-| `ORACLE_HOST` | `localhost` | Hostname |
-| `ORACLE_PORT` | `1521` | Listener-Port |
-| `ORACLE_SERVICE` | `XEPDB1` | Service-Name: `XEPDB1` für die PDB, `XE` für CDB-Root |
-| `ORACLE_CONNECT_STRING` | – | kompletter Easy-Connect-String, überschreibt Host/Port/Service |
-| `ORACLE_USER` | `sys` | Benutzer |
-| `ORACLE_PASSWORD` | – | Passwort |
-| `ORACLE_PRIVILEGE` | `SYSDBA` bei `sys`, sonst leer | `SYSDBA`, `SYSOPER` oder leer |
-| `ORACLE_DICTIONARY` | `auto` | `dba`, `all` oder `auto` |
+| `ORACLE_EXPORT_DIR` | `./exports` | Zielordner für `oracle_export_query`, relativ zum Projektordner |
 
 ## Wenn der Login scheitert (ORA-01017)
 

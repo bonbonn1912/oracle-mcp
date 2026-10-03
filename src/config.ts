@@ -1,7 +1,7 @@
 /**
- * Configuration: all connections live in connections.json next to dist/. The default connection
- * "local" also works without the file, from environment variables (env block of the Gemini
- * settings.json or the .env file); a "local" entry in the file overrides those values.
+ * Configuration: all connections live in connections.json next to dist/, their passwords in the
+ * .env file next to it. The default connection "local" also works without an entry
+ * (sys@localhost:1521/XEPDB1 as SYSDBA).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -35,7 +35,7 @@ export interface Settings {
 
 export const LOCAL = "local";
 
-function projectRoot(): string {
+export function projectRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
@@ -123,24 +123,24 @@ export function loadSettings(): Settings {
 
   const connections = new Map<string, Config>();
 
-  // ---- default connection "local" from the environment -------------------------------------
-  const user = env("ORACLE_USER") ?? "sys";
-  const host = env("ORACLE_HOST") ?? "localhost";
-  const port = env("ORACLE_PORT") ?? "1521";
-  const service = env("ORACLE_SERVICE") ?? "XEPDB1";
+  // ---- default connection "local": built-in defaults, overridden by a "local" entry in the file
+  const user = "sys";
+  const host = "localhost";
+  const port = "1521";
+  const service = "XEPDB1";
   connections.set(LOCAL, {
     name: LOCAL,
-    description: env("ORACLE_DESCRIPTION") ?? "Local database (default)",
+    description: "Local database (default)",
     user,
     password: env("ORACLE_PASSWORD") ?? "",
     passwordVar: "ORACLE_PASSWORD",
-    connectString: env("ORACLE_CONNECT_STRING") ?? `${host}:${port}/${service}`,
-    privilege: privilegeOf(env("ORACLE_PRIVILEGE"), user, "ORACLE_PRIVILEGE"),
+    connectString: `${host}:${port}/${service}`,
+    privilege: "SYSDBA",
     readOnly: globalReadOnly,
     maxRows,
     callTimeoutMs,
     exportDir,
-    dictionary: dictionaryOf(env("ORACLE_DICTIONARY"), "ORACLE_DICTIONARY"),
+    dictionary: "auto",
   });
 
   // ---- additional server connections from connections.json ---------------------------------
@@ -169,7 +169,7 @@ export function loadSettings(): Settings {
       const e = rawEntry as Record<string, unknown>;
 
       if (name === LOCAL) {
-        // "local" in the file overrides the values from the environment; everything is optional
+        // "local" in the file overrides the built-in defaults; every field is optional
         const base = connections.get(LOCAL) as Config;
         const lUser = str(e.user) ?? base.user;
         let lConnect = str(e.connectString);
@@ -188,7 +188,7 @@ export function loadSettings(): Settings {
           privilege:
             e.privilege !== undefined
               ? privilegeOf(str(e.privilege) ?? "", lUser, what)
-              : privilegeOf(env("ORACLE_PRIVILEGE"), lUser, what),
+              : privilegeOf(undefined, lUser, what),
           readOnly: globalReadOnly || boolOf(e.readOnly, false),
           maxRows: Number.isFinite(lMaxRows) && lMaxRows > 0 ? Math.floor(lMaxRows) : base.maxRows,
           dictionary: e.dictionary !== undefined ? dictionaryOf(str(e.dictionary), what) : base.dictionary,

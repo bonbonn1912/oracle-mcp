@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { once } from "node:events";
 import oracledb from "oracledb";
+import { projectRoot } from "../config.js";
 import type { ToolDef } from "../registry.js";
 import { cleanStatement, isQuery, normalizeValue, parseBinds, ToolError } from "../util.js";
 
@@ -34,7 +35,7 @@ export const exportTools: ToolDef[] = [
       let name = path.basename(String(a.filename).trim()).replace(/[^A-Za-z0-9._-]/g, "_");
       if (name === "" || name === "." || name === "..") throw new ToolError("Invalid filename.");
       if (!name.toLowerCase().endsWith(ext)) name += ext;
-      const dir = path.resolve(config.exportDir);
+      const dir = path.resolve(projectRoot(), config.exportDir);
       await mkdir(dir, { recursive: true });
       const file = path.join(dir, name);
 

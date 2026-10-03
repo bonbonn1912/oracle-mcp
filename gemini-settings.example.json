@@ -2,10 +2,7 @@
   "mcpServers": {
     "oracle": {
       "command": "node",
-      "args": [
-        "dist/index.js"
-      ],
-      "cwd": "/pfad/zu/oracle-mcp",
+      "args": ["/path/to/oracle-mcp/dist/index.js"],
       "timeout": 120000,
       "trust": false
     }

@@ -59,8 +59,7 @@ export class Db {
     }
     if (!this.config.password) {
       throw new ToolError(
-        `No password configured for connection "${this.config.name}". Put ${this.config.passwordVar}=... into ${dotEnvPath()}` +
-          (this.config.passwordVar === "ORACLE_PASSWORD" ? " or into the env block of the MCP server entry in settings.json." : ".")
+        `No password configured for connection "${this.config.name}". Put ${this.config.passwordVar}=... into ${dotEnvPath()}.`
       );
     }
     const attrs: oracledb.ConnectionAttributes = {

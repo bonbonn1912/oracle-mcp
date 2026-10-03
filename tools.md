@@ -1,6 +1,6 @@
 # oracle-mcp – Tool-Katalog
 
-MCP-Server in TypeScript für lokale Oracle-Datenbanken (21c XE, auch 19c), primär für die Gemini CLI.
+MCP-Server in TypeScript für Oracle-Datenbanken (21c XE lokal, auch 19c und Datenbanken auf Servern), primär für die Gemini CLI.
 Dieses Dokument beschreibt Konfiguration, Regeln und alle 54 Tools. Sie sind in `src/tools/` implementiert; Einrichtung siehe `README.md`.
 
 ## 1. Rahmen
@@ -9,27 +9,23 @@ Dieses Dokument beschreibt Konfiguration, Regeln und alle 54 Tools. Sie sind in 
 |---|---|
 | Laufzeit | Node.js >= 20, TypeScript, `@modelcontextprotocol/sdk`, Transport stdio |
 | Treiber | `node-oracledb` im Thin-Modus (kein Instant Client nötig, unterstützt `SYSDBA`, DB 12.1+) |
-| Verbindung | genau eine dauerhafte Session (kein Pool), damit Container-Wechsel, `CURRENT_SCHEMA` und offene Transaktionen zwischen Tool-Calls erhalten bleiben; automatischer Reconnect |
-| Login | entspricht `sqlplus sys@localhost:1521/<service> as sysdba` |
+| Verbindungen | `local` als Standard plus beliebig viele benannte Server, siehe Abschnitt 3a |
+| Session | je Verbindung genau eine dauerhafte Session (kein Pool), damit Container-Wechsel, `CURRENT_SCHEMA` und offene Transaktionen zwischen Tool-Calls erhalten bleiben; automatischer Reconnect |
+| Login `local` | entspricht `sqlplus sys@localhost:1521/<service> as sysdba` |
 | Versionen | 19c und 21c; Unterschiede (z. B. XE-Limits, Unified Audit) werden zur Laufzeit über `V$VERSION` / `V$INSTANCE` erkannt |
 
-### Konfiguration in Gemini (`~/.gemini/settings.json` oder `.gemini/settings.json`)
+### Konfiguration
+
+Drei Dateien; Felder und Einzelheiten stehen in `README.md`.
+
+**`settings.json` von Gemini** (`~/.gemini/` oder `.gemini/` im Projekt):
 
 ```json
 {
   "mcpServers": {
     "oracle": {
       "command": "node",
-      "args": ["dist/index.js"],
-      "cwd": "/pfad/zu/oracle-mcp",
-      "env": {
-        "ORACLE_HOST": "localhost",
-        "ORACLE_PORT": "1521",
-        "ORACLE_SERVICE": "XEPDB1",
-        "ORACLE_USER": "sys",
-        "ORACLE_PASSWORD": "${ORACLE_PASSWORD}",
-        "ORACLE_PRIVILEGE": "SYSDBA"
-      },
+      "args": ["/path/to/oracle-mcp/dist/index.js"],
       "timeout": 120000,
       "trust": false
     }
@@ -39,24 +35,50 @@ Dieses Dokument beschreibt Konfiguration, Regeln und alle 54 Tools. Sie sind in 
 
 `trust: false` bleibt bewusst so: Gemini fragt dann vor jedem Tool-Call nach.
 
+**`connections.json`** im Projektordner, neben `dist/`:
+
+```json
+{
+  "connections": {
+    "local": {
+      "description": "Lokale Datenbank, volle Rechte",
+      "host": "localhost",
+      "port": 1521,
+      "service": "XEPDB1",
+      "user": "sys",
+      "privilege": "SYSDBA",
+      "readOnly": false
+    },
+    "db1": {
+      "description": "Wofür diese Datenbank da ist",
+      "host": "db1.example.com",
+      "port": 1521,
+      "service": "SERVICE1",
+      "user": "benutzer1"
+    }
+  }
+}
+```
+
+**`.env`** im selben Ordner:
+
+```
+ORACLE_PASSWORD=passwort-der-lokalen-datenbank
+ORACLE_PASSWORD_DB1=...
+```
+
 ### Umgebungsvariablen
 
-| Variable | Pflicht | Default | Bedeutung |
-|---|---|---|---|
-| `ORACLE_HOST` | nein | `localhost` | Hostname |
-| `ORACLE_PORT` | nein | `1521` | Listener-Port |
-| `ORACLE_SERVICE` | nein | `XEPDB1` | Service-Name: `XEPDB1` (PDB, XE-Standard) oder `XE` (CDB-Root) |
-| `ORACLE_CONNECT_STRING` | nein | – | kompletter Easy-Connect-String; überschreibt Host/Port/Service |
-| `ORACLE_USER` | nein | `sys` | Benutzer |
-| `ORACLE_PASSWORD` | ja | – | Passwort; wird nie geloggt oder in Tool-Antworten ausgegeben. Kann statt im `env`-Block auch in einer `.env` neben `dist/` stehen |
-| `ORACLE_PRIVILEGE` | nein | `SYSDBA` wenn User `sys`, sonst leer | `SYSDBA`, `SYSOPER` oder leer |
-| `ORACLE_DICTIONARY` | nein | `auto` | `dba` = `DBA_*`-Views, `all` = `ALL_*`-Views (nur was der Benutzer sieht), `auto` = beim ersten Aufruf erkennen |
-| `ORACLE_DEFAULT_CONNECTION` | nein | `local` | Verbindung, die beim Start aktiv ist |
-| `ORACLE_CONNECTIONS_FILE` | nein | `connections.json` | Datei mit den Server-Verbindungen neben `dist/` |
-| `ORACLE_READ_ONLY` | nein | `false` | `true` registriert nur lesende Tools |
-| `ORACLE_MAX_ROWS` | nein | `200` | Obergrenze für Zeilen pro Antwort |
-| `ORACLE_CALL_TIMEOUT_MS` | nein | `60000` | Timeout pro Datenbank-Roundtrip; Wartungs-Tools (Gruppe F, Kompilieren, Export) laufen ohne Timeout |
-| `ORACLE_EXPORT_DIR` | nein | `./exports` | Zielordner für `oracle_export_query` |
+Gelten für alle Verbindungen; optional, in der `.env` oder im `env`-Block der `settings.json`. Die Verbindungen selbst stehen nur in der `connections.json`.
+
+| Variable | Default | Bedeutung |
+|---|---|---|
+| `ORACLE_DEFAULT_CONNECTION` | `local` | Verbindung, die beim Start aktiv ist |
+| `ORACLE_CONNECTIONS_FILE` | `connections.json` | Datei mit den Verbindungen, relativ zum Projektordner |
+| `ORACLE_READ_ONLY` | `false` | `true` macht alle Verbindungen nur lesbar, auch `local` |
+| `ORACLE_MAX_ROWS` | `200` | Obergrenze für Zeilen pro Antwort |
+| `ORACLE_CALL_TIMEOUT_MS` | `60000` | Timeout pro Datenbank-Roundtrip; Wartungs-Tools (Gruppe F, Kompilieren, Export) laufen ohne Timeout |
+| `ORACLE_EXPORT_DIR` | `./exports` | Zielordner für `oracle_export_query`, relativ zum Projektordner |
 
 ## 2. Regeln für alle Tools
 
@@ -187,7 +209,7 @@ Bei 8–10 gilt die Vorschau-Regel nur, wenn das SQL als destruktiv erkannt wird
 
 - Alle Verbindungen stehen in `connections.json` neben `dist/` (Felder siehe `README.md`), die Passwörter in der
   `.env` (`ORACLE_PASSWORD` für `local`, `ORACLE_PASSWORD_<NAME>` für Server). `local` ist die Standardverbindung;
-  ohne eigenen Eintrag gelten für sie die `ORACLE_*`-Variablen aus dem `env`-Block.
+  ohne eigenen Eintrag gilt `sys@localhost:1521/XEPDB1` als `SYSDBA`.
 - Sind mehrere Verbindungen konfiguriert, hat jedes Tool den optionalen Parameter `connection`. Ohne ihn läuft der
   Aufruf gegen die aktive Verbindung (`oracle_use_connection`). Jede Antwort nennt ihre Verbindung im Feld `connection`.
 - Server sind standardmäßig nur lesbar (`"readOnly": false` hebt das auf). Schreibende Tools werden dort mit
@@ -206,5 +228,5 @@ Bei 8–10 gilt die Vorschau-Regel nur, wenn das SQL als destruktiv erkannt wird
 ## 5. Stand
 
 - Alle 54 Tools sind implementiert; mit `ORACLE_READ_ONLY=true` werden nur die 28 lesenden angeboten.
-- Der Service-Name kommt aus `ORACLE_SERVICE` in der `settings.json`, Standard ist `XEPDB1`.
+- Der Service-Name von `local` steht im Feld `service` der `connections.json`, Standard ist `XEPDB1`.
 - Geprüft sind Build, Tool-Liste, Schemas, Argument-Prüfung und der Skript-Splitter. Ein Lauf gegen eine echte Oracle-Datenbank steht noch aus.
