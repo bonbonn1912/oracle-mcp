@@ -184,14 +184,21 @@ Nur für `local`, als Alternative zum Eintrag in der `connections.json` (der Ein
 
 ## Wenn der Login scheitert (ORA-01017)
 
-`SYS AS SYSDBA` über den Listener wird gegen die Passwortdatei geprüft. Stimmt das Passwort dort nicht,
-schlägt der Login fehl, obwohl das Passwort eigentlich richtig ist. Dann das SYS-Passwort einmal im
-Root-Container neu setzen (lokal mit `sqlplus / as sysdba` anmelden):
+`oracle-mcp` nutzt `node-oracledb` im **Thin-Modus** (reines JavaScript). Dadurch wird kein Oracle Instant Client benötigt, allerdings wird **keine** Windows-Betriebssystem-Authentifizierung (NTS) unterstützt.
+
+- **Unterschied zu SQL\*Plus:** Wenn du dich lokal unter Windows via `sqlplus sys@localhost:1521/XEPDB1 as sysdba` anmeldest, greift bei aktiviertem `SQLNET.AUTHENTICATION_SERVICES = (NTS)` die Windows-Gruppenzugehörigkeit (`ORA_DBA`). In SQL\*Plus wird die Passworteingabe dann ignoriert.
+- **Fehler `ORA-01017: Benutzername/Kennwort ungültig`:** Der MCP-Server verbindet sich echt über das Netzwerk und prüft das Passwort gegen die Oracle-Kennwortdatei. Stimmt das Passwort in der `.env` nicht mit dem tatsächlichen Datenbank-Kennwort überein (oder ist `SYS` im Root-Container gesperrt), schlägt der Login fehl.
+
+**Lösung / Kennwort neu setzen:**
+In einer Multitenant-Datenbank (z. B. Oracle 21c XE) muss `SYS` im Root-Container (`CDB$ROOT`) entsperrt und das Passwort mit `CONTAINER = ALL` gesetzt werden. Dazu lokal mit `sqlplus / as sysdba` anmelden und ausführen:
 
 ```sql
 ALTER SESSION SET CONTAINER = CDB$ROOT;
-ALTER USER sys IDENTIFIED BY "neues-passwort" CONTAINER = ALL;
+ALTER USER sys ACCOUNT UNLOCK;
+ALTER USER sys IDENTIFIED BY "dein-passwort" CONTAINER = ALL;
 ```
+
+Danach das identische Passwort als `ORACLE_PASSWORD` in die `.env` eintragen und den MCP-Server neu starten.
 
 ## Sicherheit
 
