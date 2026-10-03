@@ -214,6 +214,23 @@ export function isQuery(sql: string): boolean {
   return /^(SELECT|WITH)\b/i.test(s);
 }
 
+/** Finds a keyword in stripped SQL, ignoring occurrences nested in parentheses. */
+function hasTopLevelKeyword(sql: string, keyword: string): boolean {
+  let depth = 0;
+  let cursor = 0;
+  const re = /[A-Za-z][A-Za-z0-9_$#]*/g;
+  for (let match = re.exec(sql); match; match = re.exec(sql)) {
+    // Count parentheses between words, keeping quoted strings/comments out via stripSql().
+    for (let i = cursor; i < match.index; i++) {
+      if (sql[i] === "(") depth++;
+      else if (sql[i] === ")") depth = Math.max(0, depth - 1);
+    }
+    if (depth === 0 && match[0].toUpperCase() === keyword) return true;
+    cursor = re.lastIndex;
+  }
+  return false;
+}
+
 /** Returns a reason when the statement is destructive / hard to undo, otherwise null. */
 export function destructiveReason(sql: string): string | null {
   const s = stripSql(sql).trim();
@@ -226,7 +243,7 @@ export function destructiveReason(sql: string): string | null {
   }
   if (/^(DROP|TRUNCATE|PURGE|SHUTDOWN)\b/i.test(s)) return `${s.split(/\s+/)[0].toUpperCase()} statement`;
   if (/^ALTER\s+(SYSTEM|DATABASE|PLUGGABLE)\b/i.test(s)) return s.split(/\s+/).slice(0, 2).join(" ").toUpperCase();
-  if (/^(DELETE|UPDATE)\b/i.test(s) && !/\bWHERE\b/i.test(s)) {
+  if (/^(DELETE|UPDATE)\b/i.test(s) && !hasTopLevelKeyword(s, "WHERE")) {
     return `${s.split(/\s+/)[0].toUpperCase()} without WHERE`;
   }
   if (/^ALTER\s+TABLE\b[\s\S]*\bDROP\b/i.test(s)) return "ALTER TABLE ... DROP";

@@ -184,9 +184,16 @@ export class Db {
     });
   }
 
-  /** All rows as objects with lower-case keys (internal dictionary lookups, capped at 5000). */
+  /** All rows as objects with lower-case keys for internal lookups; fail rather than use partial data. */
   async rows(sql: string, binds: Binds = {}): Promise<Row[]> {
-    return (await this.list(sql, binds, 5000)).rows as Row[];
+    const result = await this.list(sql, binds, 5000);
+    if (result.truncated) {
+      throw new ToolError(
+        `Internal lookup returned more than 5000 rows and was truncated; refusing to continue with incomplete data. Narrow the lookup.`,
+        { rowLimit: 5000, returnedRows: result.rowCount, sql: sql.length > 500 ? `${sql.slice(0, 500)}…` : sql }
+      );
+    }
+    return result.rows as Row[];
   }
 
   async one(sql: string, binds: Binds = {}): Promise<Row | undefined> {

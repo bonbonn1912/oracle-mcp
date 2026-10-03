@@ -101,10 +101,16 @@ function dictionaryOf(raw: string | undefined, what: string): Config["dictionary
   return d;
 }
 
-function boolOf(v: unknown, fallback: boolean): boolean {
-  if (v === undefined || v === null || v === "") return fallback;
+function boolOf(v: unknown, fallback: boolean, what: string): boolean {
+  if (v === undefined) return fallback;
   if (typeof v === "boolean") return v;
-  return /^(1|true|yes|on)$/i.test(String(v).trim());
+  if (typeof v === "number" && (v === 0 || v === 1)) return v === 1;
+  if (typeof v === "string") {
+    const value = v.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(value)) return true;
+    if (["0", "false", "no", "off"].includes(value)) return false;
+  }
+  throw new Error(`${what}: must be a boolean (true/false, yes/no, on/off or 1/0), got ${JSON.stringify(v)}`);
 }
 
 function str(v: unknown): string | undefined {
@@ -119,7 +125,12 @@ export function loadSettings(): Settings {
   const maxRows = intEnv("ORACLE_MAX_ROWS", 200);
   const callTimeoutMs = intEnv("ORACLE_CALL_TIMEOUT_MS", 60000);
   const exportDir = env("ORACLE_EXPORT_DIR") ?? "./exports";
-  const globalReadOnly = boolOf(env("ORACLE_READ_ONLY"), false);
+  const rawReadOnly = process.env.ORACLE_READ_ONLY;
+  const globalReadOnly = boolOf(
+    rawReadOnly !== undefined && rawReadOnly.trim() === "" ? rawReadOnly : env("ORACLE_READ_ONLY"),
+    false,
+    "ORACLE_READ_ONLY",
+  );
 
   const connections = new Map<string, Config>();
 
@@ -189,7 +200,7 @@ export function loadSettings(): Settings {
             e.privilege !== undefined
               ? privilegeOf(str(e.privilege) ?? "", lUser, what)
               : privilegeOf(undefined, lUser, what),
-          readOnly: globalReadOnly || boolOf(e.readOnly, false),
+          readOnly: boolOf(e.readOnly, false, `${what}: readOnly`) || globalReadOnly,
           maxRows: Number.isFinite(lMaxRows) && lMaxRows > 0 ? Math.floor(lMaxRows) : base.maxRows,
           dictionary: e.dictionary !== undefined ? dictionaryOf(str(e.dictionary), what) : base.dictionary,
         });
@@ -218,7 +229,7 @@ export function loadSettings(): Settings {
         connectString,
         privilege: privilegeOf(str(e.privilege) ?? "", cUser, what),
         // servers are read-only unless the entry says "readOnly": false
-        readOnly: globalReadOnly || boolOf(e.readOnly, true),
+        readOnly: boolOf(e.readOnly, true, `${what}: readOnly`) || globalReadOnly,
         maxRows: Number.isFinite(cMaxRows) && cMaxRows > 0 ? Math.floor(cMaxRows) : maxRows,
         callTimeoutMs,
         exportDir,
